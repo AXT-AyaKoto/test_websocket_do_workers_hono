@@ -1,0 +1,21 @@
+{
+    "name": "test_websocket_do_workers_hono",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-06-10",
+    // DO関連(1): DO自体のBinding
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "COUNTER_ROOM_DO", // `Env.COUNTER_ROOM_DO`でアクセスすることになる
+                "class_name": "CounterRoomDO" // exportしたDOクラスの名前
+            }
+        ]
+    },
+    // DO関連(2): DOストレージのmigration
+    "migrations": [
+        {
+            "tag": "v1", // 一意なタグで、増やすときはv2, v3...のようにする
+            "new_sqlite_classes": ["CounterRoomDO"] // exportしたDOクラスの名前を配列に入れる
+        }
+    ]
+}
