@@ -27,49 +27,50 @@ export default app;
 import { DurableObject } from "cloudflare:workers";
 
 export class CounterRoomDO extends DurableObject {
-    // 現在のclientとサーバーの通信経路を保持する
-    #clients = new Set<WebSocket>();
-
     // constructor
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
     }
 
-    // Workerからrequestを受け取ってresponseを返すインスタンスメソッドを作っておく
+    // 1. HTTP(S) Requestを受け取りUpgrade Responseを返すメソッド (Workerから呼ぶ)
     async fetch(request: Request): Promise<Response> {
         // WebSocketへのUpgradeを要求していない場合は "426 Upgrade Required"で弾く
         const upgradeHeader = request.headers.get("Upgrade");
         if (upgradeHeader !== "websocket") {
             return new Response("Expected Upgrade: websocket", { status: 426 });
         }
-        // WebSocketPairで、WebSocketの通信経路の両端に相当するオブジェクトをもらえる
+        // WebSocketPairで、WebSocket接続の通信経路の両端に相当するオブジェクトをもらえる
         const pair = new WebSocketPair();
-        // 0個目がクライアントに渡すやつ、1個目がサーバー側が使うやつ
+        // 0個目がクライアントに渡す方、1個目がサーバー側が使う方
         const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
-        // サーバー側を開いておく
-        server.accept();
-        // サーバー側の処理
-        // message: incrementは+1、statusは何もせずに、それぞれcountメッセージを返す
-        server.addEventListener("message", async (event) => {
-            const data = JSON.parse(event.data as string) as { command: "increment" | "status" };
-            let currentCount = (await this.ctx.storage.get<number>("count")) ?? 0;
-            if (data.command === "increment") {
-                await this.ctx.storage.put("count", currentCount + 1);
-                currentCount++;
-            }
-            if (["increment", "status"].includes(data.command)) {
-                for (const client of this.#clients) {
-                    client.send(JSON.stringify({ command: "count", current: currentCount }));
-                }
-            }
-        });
-        // clientを追加しておく
-        this.#clients.add(server);
-        // clientがcloseされたら削除しておく
-        server.addEventListener("close", () => {
-            this.#clients.delete(server);
-        });
+        // WebSocket接続を開くメソッド (これはDO Hibernation WebSocket API独自のもの)
+        this.ctx.acceptWebSocket(server);
         // Responseでclientを返してあげる
         return new Response(null, { status: 101, webSocket: client });
+    }
+
+    // 2. 接続相手からmessageが来たときの動作を定義するメソッド
+    async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        // 一旦messageをパースする
+        const data = JSON.parse(message as string) as { command: "increment" | "status" };
+        // 今のカウントを取得する
+        const currentCount = (await this.ctx.storage.get<number>("count")) ?? 0;
+        // incrementの場合: +1したあと、全員にcountメッセージを送る
+        if (data.command === "increment") {
+            await this.ctx.storage.put("count", currentCount + 1);
+            const connections: WebSocket[] = this.ctx.getWebSockets();
+            connections.forEach((connection) => {
+                connection.send(JSON.stringify({ command: "count", current: currentCount + 1 }));
+            });
+        }
+        // statusの場合: 通信相手にだけ、countメッセージを送る
+        if (data.command === "status") {
+            ws.send(JSON.stringify({ command: "count", current: currentCount }));
+        }
+    }
+
+    // 3. 通信がcloseされたときの動作(主に後片付け)を定義するメソッド
+    async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+        // 適宜後片付けのコードを書けるが、今回は空でいい
     }
 }
